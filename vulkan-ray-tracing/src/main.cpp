@@ -89,7 +89,7 @@ int main(int argc, char **argv)
 
   // Setup camera
   CameraManip.setWindowSize(SAMPLE_WIDTH, SAMPLE_HEIGHT);
-  CameraManip.setLookat(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
+  CameraManip.setLookat(glm::vec3(4, 4, 4), glm::vec3(0, 1, 0), glm::vec3(0, 1, 0));
 
   // Setup Vulkan
   if (!glfwVulkanSupported())
@@ -118,6 +118,13 @@ int main(int argc, char **argv)
   contextInfo.addInstanceLayer("VK_LAYER_LUNARG_monitor", true);             // FPS in titlebar
   contextInfo.addInstanceExtension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME, true); // Allow debug names
   contextInfo.addDeviceExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME);           // Enabling ability to present rendering
+
+  VkPhysicalDeviceAccelerationStructureFeaturesKHR accelFeature{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+  contextInfo.addDeviceExtension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, false, &accelFeature); // To build acceleration structures
+  VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtPipelineFeature{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
+  contextInfo.addDeviceExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, false, &rtPipelineFeature); // To use vkCmdTraceRaysKHR
+  contextInfo.addDeviceExtension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);                        // Required by ray tracing pipeline
+
   // contextInfo.verboseUsed = false;
   // contextInfo.verboseCompatibleDevices = false;
 
@@ -147,7 +154,8 @@ int main(int argc, char **argv)
   helloVk.initGUI(0); // Using sub-pass 0
 
   // Creation of the example
-  helloVk.loadModel(nvh::findFile("media/scenes/cube_multi.obj", defaultSearchPaths, true));
+  helloVk.loadModel(nvh::findFile("media/scenes/Medieval_building.obj", defaultSearchPaths, true));
+  helloVk.loadModel(nvh::findFile("media/scenes/plane.obj", defaultSearchPaths, true));
 
   helloVk.createOffscreenRender();
   helloVk.createDescriptorSetLayout();
@@ -156,9 +164,18 @@ int main(int argc, char **argv)
   helloVk.createObjDescriptionBuffer();
   helloVk.updateDescriptorSet();
 
+  // #VKRay
+  helloVk.initRayTracing();
+  bool useRaytracer = true;
+  helloVk.createBottomLevelAS();
+  helloVk.createTopLevelAS();
+  helloVk.createRtDescriptorSet();
+  helloVk.createRtPipeline();
+
   helloVk.createPostDescriptor();
   helloVk.createPostPipeline();
   helloVk.updatePostDescriptorSet();
+
   glm::vec4 clearColor = glm::vec4(1, 1, 1, 1.00f);
 
   helloVk.setupGlfwCallbacks(window);
@@ -180,6 +197,7 @@ int main(int argc, char **argv)
     {
       ImGuiH::Panel::Begin();
       ImGui::ColorEdit3("Clear color", reinterpret_cast<float *>(&clearColor));
+      ImGui::Checkbox("Ray Tracer mode", &useRaytracer); // Switch between raster and ray tracing
       renderUI(helloVk);
       ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
       ImGuiH::Control::Info("", "", "(F10) Toggle Pane", ImGuiH::Control::Flags::Disabled);
@@ -215,9 +233,17 @@ int main(int argc, char **argv)
       offscreenRenderPassBeginInfo.renderArea = {{0, 0}, helloVk.getSize()};
 
       // Rendering Scene
-      vkCmdBeginRenderPass(cmdBuf, &offscreenRenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-      helloVk.rasterize(cmdBuf);
-      vkCmdEndRenderPass(cmdBuf);
+      // Rendering Scene
+      if (useRaytracer)
+      {
+        helloVk.raytrace(cmdBuf, clearColor);
+      }
+      else
+      {
+        vkCmdBeginRenderPass(cmdBuf, &offscreenRenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+        helloVk.rasterize(cmdBuf);
+        vkCmdEndRenderPass(cmdBuf);
+      }
     }
 
     // 2nd rendering pass: tone mapper, UI
