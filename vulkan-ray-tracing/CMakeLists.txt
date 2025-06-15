@@ -12,7 +12,7 @@ project(vulkan_ray_tracing)
 if(NOT EXISTS ${CMAKE_SOURCE_DIR}/../nvpro_core)
   message(STATUS "nvpro_core not found, cloning...")
   execute_process(
-    COMMAND git clone --recursive --shallow-submodules https://github.com/gaetanserre/nvpro_core
+    COMMAND git clone --recursive --shallow-submodules git@github.com:gaetanserre/nvpro_core.git
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/..
   )
 
