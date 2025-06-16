@@ -41,7 +41,6 @@ class HelloVulkan : public nvvkhl::AppBaseVk
 public:
   void setup(const VkInstance &instance, const VkDevice &device, const VkPhysicalDevice &physicalDevice, uint32_t queueFamily) override;
   void createDescriptorSetLayout();
-  void createGraphicsPipeline();
   void loadModel(const std::string &filename, glm::mat4 transform = glm::mat4(1));
   void updateDescriptorSet();
   void createUniformBuffer();
@@ -50,7 +49,6 @@ public:
   void updateUniformBuffer(const VkCommandBuffer &cmdBuf);
   void onResize(int /*w*/, int /*h*/) override;
   void destroyResources();
-  void rasterize(const VkCommandBuffer &cmdBuff);
 
   // The OBJ model
   struct ObjModel
@@ -84,8 +82,6 @@ public:
   std::vector<ObjInstance> m_instances; // Scene model instances
 
   // Graphic pipeline
-  VkPipelineLayout m_pipelineLayout;
-  VkPipeline m_graphicsPipeline;
   nvvk::DescriptorSetBindings m_descSetLayoutBind;
   VkDescriptorPool m_descPool;
   VkDescriptorSetLayout m_descSetLayout;
@@ -127,12 +123,6 @@ public:
   nvvk::RaytracingBuilderKHR::BlasInput objectToVkGeometryKHR(const ObjModel &model);
   void createBottomLevelAS();
   void createTopLevelAS();
-
-  void createRtDescriptorSet();
-  nvvk::DescriptorSetBindings m_rtDescSetLayoutBind;
-  VkDescriptorPool m_rtDescPool;
-  VkDescriptorSetLayout m_rtDescSetLayout;
-  VkDescriptorSet m_rtDescSet;
 
   void updateRtDescriptorSet();
 

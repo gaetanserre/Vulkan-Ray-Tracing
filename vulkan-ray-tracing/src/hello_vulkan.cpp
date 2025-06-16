@@ -112,8 +112,16 @@ void HelloVulkan::createDescriptorSetLayout()
   m_descSetLayoutBind.addBinding(SceneBindings::eTextures, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, nbTxt,
                                  VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
 
+  // TLAS
+  m_descSetLayoutBind.addBinding(SceneBindings::eTlas,
+                                 VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1,
+                                 VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR); // TLAS
+  m_descSetLayoutBind.addBinding(SceneBindings::eOutImage, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+                                 VK_SHADER_STAGE_RAYGEN_BIT_KHR); // Output image
+
   m_descSetLayout = m_descSetLayoutBind.createLayout(m_device);
   m_descPool = m_descSetLayoutBind.createPool(m_device, 1);
+
   m_descSet = nvvk::allocateDescriptorSet(m_device, m_descPool, m_descSetLayout);
 }
 
@@ -131,6 +139,16 @@ void HelloVulkan::updateDescriptorSet()
   VkDescriptorBufferInfo dbiSceneDesc{m_bObjDesc.buffer, 0, VK_WHOLE_SIZE};
   writes.emplace_back(m_descSetLayoutBind.makeWrite(m_descSet, SceneBindings::eObjDescs, &dbiSceneDesc));
 
+  VkAccelerationStructureKHR tlas = m_rtBuilder.getAccelerationStructure();
+
+  VkWriteDescriptorSetAccelerationStructureKHR descASInfo{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+  descASInfo.accelerationStructureCount = 1;
+  descASInfo.pAccelerationStructures = &tlas;
+  VkDescriptorImageInfo imageInfo{{}, m_offscreenColor.descriptor.imageView, VK_IMAGE_LAYOUT_GENERAL};
+
+  writes.emplace_back(m_descSetLayoutBind.makeWrite(m_descSet, SceneBindings::eTlas, &descASInfo));
+  writes.emplace_back(m_descSetLayoutBind.makeWrite(m_descSet, SceneBindings::eOutImage, &imageInfo));
+
   // All texture samplers
   std::vector<VkDescriptorImageInfo> diit;
   for (auto &texture : m_textures)
@@ -141,39 +159,6 @@ void HelloVulkan::updateDescriptorSet()
 
   // Writing the information
   vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-}
-
-//--------------------------------------------------------------------------------------------------
-// Creating the pipeline layout
-//
-void HelloVulkan::createGraphicsPipeline()
-{
-  VkPushConstantRange pushConstantRanges = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstantRaster)};
-
-  // Creating the Pipeline Layout
-  VkPipelineLayoutCreateInfo createInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-  createInfo.setLayoutCount = 1;
-  createInfo.pSetLayouts = &m_descSetLayout;
-  createInfo.pushConstantRangeCount = 1;
-  createInfo.pPushConstantRanges = &pushConstantRanges;
-  vkCreatePipelineLayout(m_device, &createInfo, nullptr, &m_pipelineLayout);
-
-  // Creating the Pipeline
-  std::vector<std::string> paths = defaultSearchPaths;
-  nvvk::GraphicsPipelineGeneratorCombined gpb(m_device, m_pipelineLayout, m_offscreenRenderPass);
-  gpb.depthStencilState.depthTestEnable = true;
-  gpb.addShader(nvh::loadFile("spv/vert_shader.vert.spv", true, paths, true), VK_SHADER_STAGE_VERTEX_BIT);
-  gpb.addShader(nvh::loadFile("spv/frag_shader.frag.spv", true, paths, true), VK_SHADER_STAGE_FRAGMENT_BIT);
-  gpb.addBindingDescription({0, sizeof(VertexObj)});
-  gpb.addAttributeDescriptions({
-      {0, 0, VK_FORMAT_R32G32B32_SFLOAT, static_cast<uint32_t>(offsetof(VertexObj, pos))},
-      {1, 0, VK_FORMAT_R32G32B32_SFLOAT, static_cast<uint32_t>(offsetof(VertexObj, nrm))},
-      {2, 0, VK_FORMAT_R32G32B32_SFLOAT, static_cast<uint32_t>(offsetof(VertexObj, color))},
-      {3, 0, VK_FORMAT_R32G32_SFLOAT, static_cast<uint32_t>(offsetof(VertexObj, texCoord))},
-  });
-
-  m_graphicsPipeline = gpb.createPipeline();
-  m_debug.setObjectName(m_graphicsPipeline, "Graphics");
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -344,15 +329,8 @@ void HelloVulkan::createTextureImages(const VkCommandBuffer &cmdBuf, const std::
 //
 void HelloVulkan::destroyResources()
 {
-  vkDestroyPipeline(m_device, m_graphicsPipeline, nullptr);
-  vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
   vkDestroyDescriptorPool(m_device, m_descPool, nullptr);
   vkDestroyDescriptorSetLayout(m_device, m_descSetLayout, nullptr);
-
-  vkDestroyPipeline(m_device, m_rtPipeline, nullptr);
-  vkDestroyPipelineLayout(m_device, m_rtPipelineLayout, nullptr);
-  vkDestroyDescriptorPool(m_device, m_rtDescPool, nullptr);
-  vkDestroyDescriptorSetLayout(m_device, m_rtDescSetLayout, nullptr);
 
   m_alloc.destroy(m_bGlobals);
   m_alloc.destroy(m_bObjDesc);
@@ -380,40 +358,14 @@ void HelloVulkan::destroyResources()
   vkDestroyRenderPass(m_device, m_offscreenRenderPass, nullptr);
   vkDestroyFramebuffer(m_device, m_offscreenFramebuffer, nullptr);
 
+  // #VKRay
   m_rtBuilder.destroy();
+  vkDestroyPipeline(m_device, m_rtPipeline, nullptr);
+  vkDestroyPipelineLayout(m_device, m_rtPipelineLayout, nullptr);
+
+  m_sbtWrapper.destroy();
 
   m_alloc.deinit();
-}
-
-//--------------------------------------------------------------------------------------------------
-// Drawing the scene in raster mode
-//
-void HelloVulkan::rasterize(const VkCommandBuffer &cmdBuf)
-{
-  VkDeviceSize offset{0};
-
-  m_debug.beginLabel(cmdBuf, "Rasterize");
-
-  // Dynamic Viewport
-  setViewport(cmdBuf);
-
-  // Drawing all triangles
-  vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline);
-  vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descSet, 0, nullptr);
-
-  for (const HelloVulkan::ObjInstance &inst : m_instances)
-  {
-    auto &model = m_objModel[inst.objIndex];
-    m_pcRaster.objIndex = inst.objIndex; // Telling which object is drawn
-    m_pcRaster.modelMatrix = inst.transform;
-
-    vkCmdPushConstants(cmdBuf, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                       sizeof(PushConstantRaster), &m_pcRaster);
-    vkCmdBindVertexBuffers(cmdBuf, 0, 1, &model.vertexBuffer.buffer, &offset);
-    vkCmdBindIndexBuffer(cmdBuf, model.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(cmdBuf, model.nbIndices, 1, 0, 0, 0);
-  }
-  m_debug.endLabel(cmdBuf);
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -656,37 +608,6 @@ void HelloVulkan::createTopLevelAS()
 }
 
 //--------------------------------------------------------------------------------------------------
-// This descriptor set holds the Acceleration structure and the output image
-//
-void HelloVulkan::createRtDescriptorSet()
-{
-  m_rtDescSetLayoutBind.addBinding(RtxBindings::eTlas, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1,
-                                   VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR); // TLAS
-  m_rtDescSetLayoutBind.addBinding(RtxBindings::eOutImage, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
-                                   VK_SHADER_STAGE_RAYGEN_BIT_KHR); // Output image
-
-  m_rtDescPool = m_rtDescSetLayoutBind.createPool(m_device);
-  m_rtDescSetLayout = m_rtDescSetLayoutBind.createLayout(m_device);
-
-  VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-  allocateInfo.descriptorPool = m_rtDescPool;
-  allocateInfo.descriptorSetCount = 1;
-  allocateInfo.pSetLayouts = &m_rtDescSetLayout;
-  vkAllocateDescriptorSets(m_device, &allocateInfo, &m_rtDescSet);
-
-  VkAccelerationStructureKHR tlas = m_rtBuilder.getAccelerationStructure();
-  VkWriteDescriptorSetAccelerationStructureKHR descASInfo{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
-  descASInfo.accelerationStructureCount = 1;
-  descASInfo.pAccelerationStructures = &tlas;
-  VkDescriptorImageInfo imageInfo{{}, m_offscreenColor.descriptor.imageView, VK_IMAGE_LAYOUT_GENERAL};
-
-  std::vector<VkWriteDescriptorSet> writes;
-  writes.emplace_back(m_rtDescSetLayoutBind.makeWrite(m_rtDescSet, RtxBindings::eTlas, &descASInfo));
-  writes.emplace_back(m_rtDescSetLayoutBind.makeWrite(m_rtDescSet, RtxBindings::eOutImage, &imageInfo));
-  vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-}
-
-//--------------------------------------------------------------------------------------------------
 // Writes the output image to the descriptor set
 // - Required when changing resolution
 //
@@ -694,7 +615,7 @@ void HelloVulkan::updateRtDescriptorSet()
 {
   // (1) Output buffer
   VkDescriptorImageInfo imageInfo{{}, m_offscreenColor.descriptor.imageView, VK_IMAGE_LAYOUT_GENERAL};
-  VkWriteDescriptorSet wds = m_rtDescSetLayoutBind.makeWrite(m_rtDescSet, RtxBindings::eOutImage, &imageInfo);
+  VkWriteDescriptorSet wds = m_descSetLayoutBind.makeWrite(m_descSet, SceneBindings::eOutImage, &imageInfo);
   vkUpdateDescriptorSets(m_device, 1, &wds, 0, nullptr);
 }
 
@@ -774,7 +695,7 @@ void HelloVulkan::createRtPipeline()
   pipelineLayoutCreateInfo.pPushConstantRanges = &pushConstant;
 
   // Descriptor sets: one specific to ray tracing, and one shared with the rasterization pipeline
-  std::vector<VkDescriptorSetLayout> rtDescSetLayouts = {m_rtDescSetLayout, m_descSetLayout};
+  std::vector<VkDescriptorSetLayout> rtDescSetLayouts = {m_descSetLayout};
   pipelineLayoutCreateInfo.setLayoutCount = static_cast<uint32_t>(rtDescSetLayouts.size());
   pipelineLayoutCreateInfo.pSetLayouts = rtDescSetLayouts.data();
 
@@ -821,7 +742,7 @@ void HelloVulkan::raytrace(const VkCommandBuffer &cmdBuf, const glm::vec4 &clear
   m_pcRay.lightIntensity = m_pcRaster.lightIntensity;
   m_pcRay.lightType = m_pcRaster.lightType;
 
-  std::vector<VkDescriptorSet> descSets{m_rtDescSet, m_descSet};
+  std::vector<VkDescriptorSet> descSets{m_descSet};
   vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
   vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipelineLayout, 0,
                           (uint32_t)descSets.size(), descSets.data(), 0, nullptr);

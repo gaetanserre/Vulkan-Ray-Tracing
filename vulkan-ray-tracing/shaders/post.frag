@@ -17,7 +17,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#version 450
+#version 460
 layout(location = 0) in vec2 outUV;
 layout(location = 0) out vec4 fragColor;
 
@@ -32,6 +32,6 @@ pushc;
 void main()
 {
   vec2  uv    = outUV;
-  float gamma = 1. / 2.2;
+  float gamma = 0.45; // (1.0 / 2.2222)
   fragColor   = pow(texture(noisyTxt, uv).rgba, vec4(gamma));
 }

@@ -158,20 +158,22 @@ int main(int argc, char **argv)
   helloVk.loadModel(nvh::findFile("media/scenes/plane.obj", defaultSearchPaths, true));
 
   helloVk.createOffscreenRender();
+
+  // Initialize ray tracing structures
+  helloVk.initRayTracing();
+  helloVk.createBottomLevelAS();
+  helloVk.createTopLevelAS();
+
+  // Descriptor sets and buffers
   helloVk.createDescriptorSetLayout();
-  helloVk.createGraphicsPipeline();
   helloVk.createUniformBuffer();
   helloVk.createObjDescriptionBuffer();
   helloVk.updateDescriptorSet();
 
-  // #VKRay
-  helloVk.initRayTracing();
-  bool useRaytracer = true;
-  helloVk.createBottomLevelAS();
-  helloVk.createTopLevelAS();
-  helloVk.createRtDescriptorSet();
+  // Ray tracing pipeline
   helloVk.createRtPipeline();
 
+  // Post processing pipeline (RGB to sRGB)
   helloVk.createPostDescriptor();
   helloVk.createPostPipeline();
   helloVk.updatePostDescriptorSet();
@@ -197,7 +199,6 @@ int main(int argc, char **argv)
     {
       ImGuiH::Panel::Begin();
       ImGui::ColorEdit3("Clear color", reinterpret_cast<float *>(&clearColor));
-      ImGui::Checkbox("Ray Tracer mode", &useRaytracer); // Switch between raster and ray tracing
       renderUI(helloVk);
       ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
       ImGuiH::Control::Info("", "", "(F10) Toggle Pane", ImGuiH::Control::Flags::Disabled);
@@ -233,17 +234,7 @@ int main(int argc, char **argv)
       offscreenRenderPassBeginInfo.renderArea = {{0, 0}, helloVk.getSize()};
 
       // Rendering Scene
-      // Rendering Scene
-      if (useRaytracer)
-      {
-        helloVk.raytrace(cmdBuf, clearColor);
-      }
-      else
-      {
-        vkCmdBeginRenderPass(cmdBuf, &offscreenRenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-        helloVk.rasterize(cmdBuf);
-        vkCmdEndRenderPass(cmdBuf);
-      }
+      helloVk.raytrace(cmdBuf, clearColor);
     }
 
     // 2nd rendering pass: tone mapper, UI
